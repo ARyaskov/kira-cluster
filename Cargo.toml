@@ -1,10 +1,23 @@
 [package]
 name = "kira-cluster"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
 description = "Deterministic Rust CLI for MMseqs2-like approximate high-throughput sequence clustering/search workflows."
+repository = "https://github.com/ARyaskov/kira-cluster"
+keywords = [
+    "bioinformatics",
+    "protein",
+    "proteomics"
+]
+categories = [
+    "science",
+    "science::bioinformatics",
+    "science::bioinformatics::proteomics",
+    "science::bioinformatics::sequence-analysis",
+    "command-line-utilities"
+]
 build = "build.rs"
 
 [features]
