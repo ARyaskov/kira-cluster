@@ -3,6 +3,8 @@ name = "kira-cluster"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+license = "MIT"
+description = "Deterministic Rust CLI for MMseqs2-like approximate high-throughput sequence clustering/search workflows."
 build = "build.rs"
 
 [features]
