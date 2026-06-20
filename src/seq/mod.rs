@@ -112,12 +112,18 @@ pub fn validate_seq(seq: &[u8], dbtype: DbType) -> Result<()> {
     match dbtype {
         DbType::Auto => Ok(()),
         DbType::Protein => {
-            if seq.iter().all(|b| b.is_ascii_uppercase()) {
+            // Standard residues and IUPAC ambiguity codes are all A-Z; also
+            // accept '*' (stop) and '-' (gap), which occur in real protein
+            // FASTA. Both are excluded from seeds and scored as 'X'.
+            if seq
+                .iter()
+                .all(|&b| b.is_ascii_uppercase() || b == b'*' || b == b'-')
+            {
                 Ok(())
             } else {
                 Err(AppError::new(
                     ErrorKind::Validation,
-                    "protein sequence contains non A-Z characters",
+                    "protein sequence contains invalid characters (allowed: A-Z, *, -)",
                 ))
             }
         }

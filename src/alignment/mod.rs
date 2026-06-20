@@ -1,6 +1,8 @@
 use crate::alignment::scoring::ScoringParams;
 use crate::simd::SimdBackend;
 
+pub mod banded;
+pub mod farrar;
 pub mod gapped_avx2;
 pub mod gapped_neon;
 pub mod gapped_scalar;
@@ -9,21 +11,6 @@ pub mod gpu;
 pub mod scoring;
 
 pub type SeqId = u32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlignmentMode {
-    Fast,
-    Sensitive,
-}
-
-impl AlignmentMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AlignmentMode::Fast => "fast",
-            AlignmentMode::Sensitive => "sensitive",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlignmentResult {

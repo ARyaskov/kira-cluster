@@ -22,6 +22,9 @@ pub mod table;
 pub struct ClusterConfig {
     pub min_identity: f32,
     pub min_coverage: f32,
+    /// MMseqs2-style coverage mode (0=bidirectional, 1=target, 2=query,
+    /// 3=length ratio). See [`crate::cluster::filter::coverage_satisfied`].
+    pub cov_mode: u8,
     pub kmer_size: Option<usize>,
     pub kmer_per_seq: usize,
     pub cascade_level: CascadeLevel,
@@ -33,6 +36,9 @@ pub struct ClusterConfig {
     pub gpu_memory_limit: usize,
     pub cpu_threads: usize,
     pub backend: SimdBackend,
+    /// Use the reduced amino-acid alphabet for seed generation (protein only).
+    /// Lets clustering find diverged homologs that exact k-mers miss.
+    pub reduce_alphabet: bool,
     pub profiler: Option<std::sync::Arc<Profiler>>,
 }
 
@@ -106,7 +112,12 @@ impl SeqDb {
         if self.meta.dbtype == "nucleotide" {
             15
         } else {
-            14
+            // Protein clustering uses the reduced (6-class) alphabet for seeds,
+            // so a moderately long k retains specificity comparable to an exact
+            // ~6-mer while tolerating conservative substitutions. (Exact 14-mers
+            // almost never collide across diverged proteins, which is why the
+            // previous default produced near-all-singletons.)
+            10
         }
     }
 }

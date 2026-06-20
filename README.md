@@ -108,6 +108,32 @@ KIRA_CLUSTER_BIN=target/release/kira-cluster \
   cargo bench --bench tool_compare -- data/uniref50_sample.fasta target/bench-uniref50-sample
 ```
 
+## Sensitivity defaults
+
+- Protein clustering seeds use a reduced (Dayhoff-6) amino-acid alphabet with a
+  shorter default `k`, and alignment uses BLOSUM62 by default. This lets
+  clustering surface homologs well below ~90% identity (exact long k-mers almost
+  never collide across diverged proteins). `--sub-matrix simple` restores flat
+  match/mismatch scoring.
+- The default cascade is `fast` (positional, no gapped alignment) for
+  predictable speed on any input size. Pass `--alignment-mode sensitive` (or
+  `--cascade-level sensitive`) to enable banded, BLOSUM62-scored gapped alignment
+  that also catches indel-containing homologs.
+- `--cov-mode {0,1,2,3}` selects the MMseqs2-style coverage definition:
+  `0` bidirectional (default), `1` target, `2` query, `3` target/query length ratio.
+
+## Limitations / Experimental
+
+- `serve` is a stub: it binds, answers a single request with a static JSON body,
+  and exits. It is not a production server.
+- `--seed-policy syncmer` is not implemented and emits `UNIMPLEMENTED_FLAG`.
+- GPU (`--gpu --gpu-backend cuda`) is feature-gated (`--features cuda`) and falls
+  back to CPU with a deterministic `KW2001 GPU_BACKEND_UNAVAILABLE_FALLBACK`
+  warning when unavailable.
+- `roaring` hot-posting storage is feature-gated (`--features roaring`).
+- The index/search path uses exact k-mers (the reduced alphabet applies to
+  clustering only).
+
 ## Notes
 
 - If GPU is requested but unavailable, deterministic warning `KW2001 GPU_BACKEND_UNAVAILABLE_FALLBACK cuda` is emitted and CPU fallback is used.

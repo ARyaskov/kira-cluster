@@ -1,6 +1,6 @@
 [package]
 name = "kira-cluster"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -24,6 +24,10 @@ build = "build.rs"
 default = []
 cuda = []
 roaring = ["dep:roaring"]
+# Cross-check every SIMD Gotoh alignment against the scalar implementation via
+# debug_assert. Off by default so debug builds aren't ~2x slower; enable when
+# changing the alignment kernels.
+verify-simd = []
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

@@ -24,6 +24,9 @@ impl Cell {
     };
 }
 
+/// Full (unbanded) local Gotoh alignment with `matches`/`aligned_len` tracking.
+/// This is the reference implementation used to validate the faster banded and
+/// SIMD kernels.
 pub fn smith_waterman_gotoh_scalar(a: &[u8], b: &[u8], scoring: &ScoringParams) -> AlignmentResult {
     if a.is_empty() || b.is_empty() {
         return AlignmentResult {

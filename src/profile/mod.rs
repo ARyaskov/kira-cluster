@@ -133,8 +133,10 @@ impl Profiler {
             .stage_timings_ns
             .entry("candidate_grouping")
             .or_insert(0);
-        state.stage_timings_ns.entry("filter_hamming").or_insert(0);
-        state.stage_timings_ns.entry("filter_ungapped").or_insert(0);
+        state
+            .stage_timings_ns
+            .entry("filter_prefilter")
+            .or_insert(0);
         state.stage_timings_ns.entry("filter_gapped").or_insert(0);
         state
             .stage_timings_ns
@@ -233,8 +235,7 @@ impl ProfileReport {
             "kmer_table_build",
             "kmer_sort",
             "candidate_grouping",
-            "filter_hamming",
-            "filter_ungapped",
+            "filter_prefilter",
             "filter_gapped",
             "greedy_assignment",
             "final_write",

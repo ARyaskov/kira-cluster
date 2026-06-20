@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use clap::Parser;
 
-use crate::alignment::AlignmentMode;
 use crate::alignment::scoring::ScoringParams;
 use crate::cascade::CascadeLevel;
 use crate::cli::mmseqs_compat::{
@@ -283,13 +282,6 @@ fn print_mmseqs_comparison_header(opts: &CommonOpts) {
     }
 }
 
-fn resolve_alignment_mode(opts: &CommonOpts) -> AlignmentMode {
-    match opts.alignment_mode.unwrap_or(AlignmentModeArg::Fast) {
-        AlignmentModeArg::Fast => AlignmentMode::Fast,
-        AlignmentModeArg::Sensitive => AlignmentMode::Sensitive,
-    }
-}
-
 fn resolve_cascade_level(opts: &CommonOpts) -> CascadeLevel {
     if let Some(v) = opts.cascade_level {
         return match v {
@@ -299,9 +291,14 @@ fn resolve_cascade_level(opts: &CommonOpts) -> CascadeLevel {
             CascadeLevelArg::Ultra => CascadeLevel::Ultra,
         };
     }
-    match resolve_alignment_mode(opts) {
-        AlignmentMode::Fast => CascadeLevel::Fast,
-        AlignmentMode::Sensitive => CascadeLevel::Sensitive,
+    // Default to the fast (positional) cascade for predictable speed on any
+    // input size. The reduced-alphabet candidate generation and BLOSUM62 scoring
+    // still apply; pass --alignment-mode sensitive / --cascade-level sensitive to
+    // enable gapped alignment (catches indel-containing homologs, slower).
+    match opts.alignment_mode {
+        Some(AlignmentModeArg::Fast) => CascadeLevel::Fast,
+        Some(AlignmentModeArg::Sensitive) => CascadeLevel::Sensitive,
+        None => CascadeLevel::Fast,
     }
 }
 
@@ -315,7 +312,12 @@ fn resolve_scoring(opts: &CommonOpts, resolved_dbtype: &str) -> ScoringParams {
     let mut scoring = if resolved_dbtype == "nucleotide" {
         ScoringParams::nucleotide_default()
     } else {
-        ScoringParams::protein_default()
+        // Protein defaults to BLOSUM62; `--sub-matrix simple` selects the flat
+        // match/mismatch model.
+        match opts.sub_matrix.as_deref().map(str::to_ascii_lowercase) {
+            Some(ref s) if s == "simple" => ScoringParams::protein_default(),
+            _ => ScoringParams::protein_blosum62(),
+        }
     };
     if let Some(v) = opts.gap_open {
         scoring.gap_open = v;
@@ -439,6 +441,7 @@ pub fn run() -> Result<()> {
                 &ClusterConfig {
                     min_identity: args.opts.min_seq_id.unwrap_or(0.9),
                     min_coverage: args.opts.cov.unwrap_or(0.8),
+                    cov_mode: args.opts.cov_mode.unwrap_or(0),
                     kmer_size: args.opts.kmer_size.map(|v| v as usize),
                     kmer_per_seq: ((args.opts.kmer_per_seq.unwrap_or(20) as f32)
                         * args.opts.sensitivity.unwrap_or(1.0).max(1.0))
@@ -452,6 +455,7 @@ pub fn run() -> Result<()> {
                     gpu_memory_limit: args.opts.gpu_memory_limit.unwrap_or(1 << 30),
                     cpu_threads: args.opts.cpu_threads.unwrap_or(args.opts.threads),
                     backend,
+                    reduce_alphabet: meta.dbtype == "protein",
                     profiler: profiler.clone(),
                 },
             )?;
@@ -497,6 +501,14 @@ pub fn run() -> Result<()> {
                     WARN_UNIMPLEMENTED
                 );
             }
+            let scoring = match handle
+                .segments
+                .first()
+                .map(|s| s.db.meta.dbtype.as_str())
+            {
+                Some("nucleotide") => ScoringParams::nucleotide_default(),
+                _ => ScoringParams::protein_blosum62(),
+            };
             let opts = SearchOpts {
                 k: args.k,
                 m: args.m,
@@ -508,7 +520,7 @@ pub fn run() -> Result<()> {
                 prune_df_quantile: args.prune_df_quantile,
                 max_seeds_per_query: args.max_seeds_per_query,
                 work_budget: args.work_budget,
-                scoring: ScoringParams::protein_default(),
+                scoring,
                 backend,
                 seed: args.seed,
                 seed_policy: resolve_seed_policy_mode(args.seed_policy)
@@ -527,7 +539,14 @@ pub fn run() -> Result<()> {
                     })
                     .or_else(|| handle.seed_policy.clone()),
             };
-            search_index(&handle, &args.query_fasta, &args.out_tsv, &opts)
+            let stats = search_index(&handle, &args.query_fasta, &args.out_tsv, &opts)?;
+            eprintln!(
+                "INFO SEARCH_DONE queries={} hits={} zero_hit_queries={}",
+                stats.queries,
+                stats.total_hits,
+                stats.zero_hit_queries()
+            );
+            Ok(())
         }
         Commands::UpdateIndex(args) => {
             update_index(
@@ -570,6 +589,10 @@ pub fn run() -> Result<()> {
         }
         Commands::Serve(args) => {
             let _handle = IndexHandle::open(&args.indexdir)?;
+            eprintln!(
+                "WARN {} EXPERIMENTAL serve is a stub: it answers a single request with a static JSON body and exits",
+                WARN_UNIMPLEMENTED
+            );
             let addr = format!("{}:{}", args.host, args.port);
             let listener =
                 TcpListener::bind(&addr).map_err(|e| AppError::io(format!("bind {}", addr), e))?;

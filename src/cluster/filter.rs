@@ -47,6 +47,42 @@ pub fn ungapped_filter(
     identity >= min_identity
 }
 
+/// MMseqs2-style coverage decision. `q` is the query (the sequence being
+/// assigned / searched), `t` is the target (the cluster representative / DB hit).
+///
+/// - mode 0: bidirectional — alignment must cover `min_cov` of BOTH query and
+///   target (equivalently `aligned_len / max(q, t) >= min_cov`).
+/// - mode 1: coverage of target (`aligned_len / t`).
+/// - mode 2: coverage of query (`aligned_len / q`).
+/// - mode 3: target length is at least `min_cov` of the query length (a pure
+///   length-ratio gate; the alignment length is ignored).
+pub fn coverage_satisfied(
+    aligned_len: u32,
+    qlen: usize,
+    tlen: usize,
+    min_cov: f32,
+    cov_mode: u8,
+) -> bool {
+    let a = aligned_len as f32;
+    let q = qlen.max(1) as f32;
+    let t = tlen.max(1) as f32;
+    match cov_mode {
+        1 => a / t >= min_cov,
+        2 => a / q >= min_cov,
+        3 => t / q >= min_cov,
+        _ => a / q >= min_cov && a / t >= min_cov,
+    }
+}
+
+/// Length-only necessary condition for [`coverage_satisfied`]: the best possible
+/// coverage is achieved when the alignment spans the entire shorter sequence
+/// (`aligned_len <= min(q, t)`). If even that cannot reach `min_cov`, the pair
+/// can be rejected before alignment without losing any true positive.
+pub fn coverage_prefilter(qlen: usize, tlen: usize, min_cov: f32, cov_mode: u8) -> bool {
+    let best = qlen.min(tlen) as u32;
+    coverage_satisfied(best, qlen, tlen, min_cov, cov_mode)
+}
+
 fn hamming_count_scalar(a: &[u8], b: &[u8], max_mismatches: u32) -> u32 {
     let mut mismatches = 0u32;
     for (&x, &y) in a.iter().zip(b) {

@@ -1,4 +1,5 @@
 use crate::alignment::AlignmentResult;
+#[cfg(feature = "verify-simd")]
 use crate::alignment::gapped_scalar::smith_waterman_gotoh_scalar;
 use crate::alignment::scoring::ScoringParams;
 
@@ -264,6 +265,7 @@ fn smith_waterman_gotoh_antidiagonal(
         matches: best.matches,
     };
 
+    #[cfg(feature = "verify-simd")]
     debug_assert_eq!(result, smith_waterman_gotoh_scalar(a, b, scoring));
     result
 }
@@ -309,12 +311,12 @@ fn fill_sub_scores(
     scoring: &ScoringParams,
     out: &mut ScoreOutputs,
 ) {
+    // Substitution scores are computed scalar per lane (cheap table lookup or
+    // match/mismatch); the surrounding H/E/F recurrence is what gets vectorized.
+    // Routing through `score_pair` keeps the SIMD path identical to the scalar
+    // path for both flat and BLOSUM62 scoring.
     for lane in 0..lanes {
-        out.sub[lane] = if inputs.a[lane] == inputs.b[lane] {
-            scoring.match_score as i32
-        } else {
-            scoring.mismatch_score as i32
-        };
+        out.sub[lane] = scoring.score_pair(inputs.a[lane], inputs.b[lane]) as i32;
     }
 }
 

@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 
 use crate::cluster::SeqDb;
-use crate::cluster::kmer::extract_seeds;
+use crate::cluster::kmer::{KmerSeed, SeedScratch, extract_seeds_into};
 use crate::profile::{Profiler, WorkCounters};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,47 +21,57 @@ impl KmerTable {
         db: &SeqDb,
         k: usize,
         m: usize,
+        reduce: bool,
         pool: Option<&rayon::ThreadPool>,
         profiler: Option<&Profiler>,
     ) -> Self {
         let n = db.n_seqs();
+        let to_entries = |buf: &[KmerSeed]| -> Vec<KmerEntry> {
+            buf.iter()
+                .map(|s| KmerEntry {
+                    hash: s.hash,
+                    seq_id: s.seq_id,
+                    pos: s.pos,
+                })
+                .collect()
+        };
+        // Reuse per-thread scratch buffers across sequences (seed generation
+        // dominates the fast path); order is preserved, so output stays
+        // deterministic.
         let seed_guard = profiler.map(|p| p.stage("seed_generation"));
-        let per_seq_entries: Vec<Vec<KmerEntry>> = match pool {
+        let mut entries: Vec<KmerEntry> = match pool {
             Some(p) => p.install(|| {
                 (0..n)
                     .into_par_iter()
-                    .map(|idx| {
-                        let id = idx as u32;
-                        extract_seeds(db.seq(id), id, k, m)
-                            .into_iter()
-                            .map(|s| KmerEntry {
-                                hash: s.hash,
-                                seq_id: s.seq_id,
-                                pos: s.pos,
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>()
+                    .map_init(
+                        || (SeedScratch::default(), Vec::<KmerSeed>::new()),
+                        |(scratch, buf), idx| {
+                            extract_seeds_into(db.seq(idx as u32), idx as u32, k, m, reduce, scratch, buf);
+                            to_entries(buf)
+                        },
+                    )
+                    .flatten()
+                    .collect()
             }),
-            None => (0..n)
-                .map(|idx| {
-                    let id = idx as u32;
-                    extract_seeds(db.seq(id), id, k, m)
-                        .into_iter()
-                        .map(|s| KmerEntry {
-                            hash: s.hash,
-                            seq_id: s.seq_id,
-                            pos: s.pos,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>(),
+            None => {
+                let mut scratch = SeedScratch::default();
+                let mut buf = Vec::new();
+                let mut acc = Vec::new();
+                for idx in 0..n {
+                    extract_seeds_into(db.seq(idx as u32), idx as u32, k, m, reduce, &mut scratch, &mut buf);
+                    acc.extend(buf.iter().map(|s| KmerEntry {
+                        hash: s.hash,
+                        seq_id: s.seq_id,
+                        pos: s.pos,
+                    }));
+                }
+                acc
+            }
         };
         drop(seed_guard);
 
         let build_guard = profiler.map(|p| p.stage("kmer_table_build"));
-        let total_seeds = per_seq_entries.iter().map(|v| v.len() as u64).sum::<u64>();
-        let mut entries: Vec<KmerEntry> = per_seq_entries.into_iter().flatten().collect();
+        let total_seeds = entries.len() as u64;
         drop(build_guard);
 
         if let Some(p) = profiler {

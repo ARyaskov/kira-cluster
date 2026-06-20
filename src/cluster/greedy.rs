@@ -26,7 +26,14 @@ pub fn cluster(db: &SeqDb, cfg: &ClusterConfig, k: usize) -> Result<ClusterResul
     };
     let pool_ref = pool.as_ref();
 
-    let table = KmerTable::build(db, k, cfg.kmer_per_seq, pool_ref, cfg.profiler.as_deref());
+    let table = KmerTable::build(
+        db,
+        k,
+        cfg.kmer_per_seq,
+        cfg.reduce_alphabet,
+        pool_ref,
+        cfg.profiler.as_deref(),
+    );
     let grouping_guard = cfg.profiler.as_ref().map(|p| p.stage("candidate_grouping"));
     let rep_candidates = build_group_candidates(db, &table);
     drop(grouping_guard);
@@ -104,6 +111,14 @@ pub fn cluster(db: &SeqDb, cfg: &ClusterConfig, k: usize) -> Result<ClusterResul
     })
 }
 
+/// Groups up to this many distinct sequences become a full candidate clique so
+/// that mutually-similar members are linked even when the longest member is not
+/// similar to them. Larger groups fall back to a symmetric star to bound memory.
+const CLIQUE_CAP: usize = 64;
+/// Groups larger than this are treated as uninformative high-frequency k-mers
+/// (repeats / low complexity) and skipped, mirroring df-based masking.
+const MAX_GROUP: usize = 1024;
+
 fn build_group_candidates(db: &SeqDb, table: &KmerTable) -> Vec<Vec<u32>> {
     let mut out: Vec<Vec<u32>> = vec![Vec::new(); db.n_seqs()];
 
@@ -115,13 +130,31 @@ fn build_group_candidates(db: &SeqDb, table: &KmerTable) -> Vec<Vec<u32>> {
         let mut ids: Vec<u32> = group.iter().map(|e| e.seq_id).collect();
         ids.sort_unstable();
         ids.dedup();
-        if ids.len() < 2 {
+        let n = ids.len();
+        if n < 2 || n > MAX_GROUP {
             continue;
         }
 
-        ids.sort_by(|a, b| db.seq_len(*b).cmp(&db.seq_len(*a)).then(a.cmp(b)));
-        let leader = ids[0];
-        out[leader as usize].extend_from_slice(&ids[1..]);
+        if n <= CLIQUE_CAP {
+            // Full clique: every member is a candidate of every other member.
+            // Edges are symmetric, so they survive even if any single member is
+            // absorbed into another cluster first.
+            for i in 0..n {
+                for j in 0..n {
+                    if i != j {
+                        out[ids[i] as usize].push(ids[j]);
+                    }
+                }
+            }
+        } else {
+            // Symmetric star centered on the longest member.
+            ids.sort_by(|a, b| db.seq_len(*b).cmp(&db.seq_len(*a)).then(a.cmp(b)));
+            let leader = ids[0];
+            for &id in &ids[1..] {
+                out[leader as usize].push(id);
+                out[id as usize].push(leader);
+            }
+        }
     }
 
     for v in &mut out {

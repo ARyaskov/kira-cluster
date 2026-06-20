@@ -1,14 +1,15 @@
+use std::io::Write;
 use std::path::Path;
 
 use crate::alignment::scoring::ScoringParams;
 use crate::cluster::kmer::{KmerSeed, extract_seeds};
-use crate::error::Result;
+use crate::error::{AppError, ErrorKind, Result};
 use crate::index::IndexHandle;
 use crate::index::df::idf;
 use crate::index::scoring::score_candidate;
 use crate::index::segment::SegmentHandle;
 use crate::index::tune::seed_policy::{SeedPolicy, choose_k_for_query};
-use crate::io::atomic::write_atomic;
+use crate::io::atomic::write_atomic_with;
 use crate::seq::fasta;
 use crate::simd::SimdBackend;
 
@@ -44,22 +45,80 @@ pub struct Hit {
     pub explain: String,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SearchStats {
+    pub queries: u64,
+    pub queries_with_hits: u64,
+    pub total_hits: u64,
+}
+
+impl SearchStats {
+    pub fn zero_hit_queries(&self) -> u64 {
+        self.queries.saturating_sub(self.queries_with_hits)
+    }
+}
+
+/// Verify that the search-time k/seed match what the index was built with.
+/// A mismatch otherwise produces a silently empty result file: the probe key is
+/// `hash ^ seed` over k-mers of length k, so any divergence misses every key.
+fn validate_search_opts(handle: &IndexHandle, opts: &SearchOpts) -> Result<()> {
+    for seg in &handle.segments {
+        if opts.k != seg.meta.k {
+            return Err(AppError::new(
+                ErrorKind::Validation,
+                format!(
+                    "search --k {} does not match index k {} (segment {}); rebuild the index or pass --k {}",
+                    opts.k, seg.meta.k, seg.meta.segment_id, seg.meta.k
+                ),
+            ));
+        }
+        if opts.seed != seg.meta.seed {
+            return Err(AppError::new(
+                ErrorKind::Validation,
+                format!(
+                    "search --seed {} does not match index seed {} (segment {}); pass --seed {}",
+                    opts.seed, seg.meta.seed, seg.meta.segment_id, seg.meta.seed
+                ),
+            ));
+        }
+        if opts.m != seg.meta.m {
+            eprintln!(
+                "WARN KW2001 SEARCH_M_MISMATCH query_m={} index_m={} segment={}",
+                opts.m, seg.meta.m, seg.meta.segment_id
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn search_index(
     handle: &IndexHandle,
     query_fasta: &Path,
     out_tsv: &Path,
     opts: &SearchOpts,
-) -> Result<()> {
-    let mut out = Vec::new();
+) -> Result<SearchStats> {
+    validate_search_opts(handle, opts)?;
 
-    fasta::parse_fasta(query_fasta, |query_name, query_seq| {
-        let mut hits = Vec::new();
-        search_query_sequence(&handle.segments, &query_seq, opts, &mut hits);
-        for mut h in hits {
-            h.query_id = query_name.clone();
-            out.extend_from_slice(
-                format!(
-                    "{}\t{}\t{}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\n",
+    let mut stats = SearchStats::default();
+    write_atomic_with(out_tsv, |w| {
+        let mut line = String::new();
+        fasta::parse_fasta(query_fasta, |query_name, query_seq| {
+            let mut hits = Vec::new();
+            search_query_sequence(&handle.segments, &query_seq, opts, &mut hits);
+
+            stats.queries += 1;
+            if !hits.is_empty() {
+                stats.queries_with_hits += 1;
+            }
+            stats.total_hits += hits.len() as u64;
+
+            for mut h in hits {
+                h.query_id = query_name.clone();
+                line.clear();
+                use std::fmt::Write as _;
+                let _ = writeln!(
+                    line,
+                    "{}\t{}\t{}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}",
                     h.query_id,
                     h.target_id,
                     h.score,
@@ -70,14 +129,15 @@ pub fn search_index(
                     h.explain,
                     h.target_name,
                     h.local_id
-                )
-                .as_bytes(),
-            );
-        }
-        Ok(())
+                );
+                w.write_all(line.as_bytes())
+                    .map_err(|e| AppError::io("write hits tsv", e))?;
+            }
+            Ok(())
+        })
     })?;
 
-    write_atomic(out_tsv, &out)
+    Ok(stats)
 }
 
 pub fn search_query_sequence(
